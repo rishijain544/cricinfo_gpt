@@ -2,7 +2,8 @@ const https = require('https');
 const http = require('http');
 const { URL } = require('url');
 
-function fetchURL(urlStr, timeout = 6000) {
+function fetchURL(urlStr, timeout = 6000, redirects = 0) {
+  if (redirects > 3) return Promise.resolve('');
   return new Promise((resolve) => {
     try {
       const urlObj = new URL(urlStr);
@@ -11,13 +12,18 @@ function fetchURL(urlStr, timeout = 6000) {
         hostname: urlObj.hostname,
         path: urlObj.pathname + urlObj.search,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'text/html,application/json',
-          'Accept-Language': 'en-US,en;q=0.9',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=1.0',
         },
         timeout,
       };
       const req = lib.get(options, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          const nextUrl = new URL(res.headers.location, urlStr).href;
+          return fetchURL(nextUrl, timeout, redirects + 1).then(resolve);
+        }
+        res.setEncoding('utf8');
         let data = '';
         res.on('data', chunk => data += chunk);
         res.on('end', () => resolve(data));
@@ -38,13 +44,48 @@ function cleanHTML(html) {
 
 async function searchWikipedia(query) {
   try {
-    const q = encodeURIComponent(query + ' cricket');
-    const raw = await fetchURL(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${q}&format=json&srlimit=3`);
+    // 1. Search for top 3 titles
+    const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query + ' cricket')}&format=json&srlimit=3`;
+    const searchRaw = await fetchURL(searchUrl);
+    if (!searchRaw) return '';
+    
+    const searchData = JSON.parse(searchRaw);
+    const titles = searchData.query?.search?.map(s => s.title) || [];
+    if (titles.length === 0) return '';
+
+    // 2. Get summaries for found titles in parallel
+    const summaries = await Promise.all(titles.map(async (title) => {
+      const summaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, '_'))}`;
+      const summaryRaw = await fetchURL(summaryUrl);
+      if (!summaryRaw) return null;
+      try {
+        const data = JSON.parse(summaryRaw);
+        return data.extract ? `• Wikipedia (${title}): ${data.extract}` : null;
+      } catch { return null; }
+    }));
+
+    return summaries.filter(s => s).join('\n\n');
+  } catch { return ''; }
+}
+
+async function searchDuckDuckGoAPI(query) {
+  try {
+    const q = encodeURIComponent(query);
+    const url = `https://api.duckduckgo.com/?q=${q}&format=json&no_html=1&skip_disambig=1`;
+    const raw = await fetchURL(url);
     if (!raw) return '';
+    
     const data = JSON.parse(raw);
-    return data.query?.search?.slice(0, 3)
-      .map(r => `• Wiki: ${r.title} - ${cleanHTML(r.snippet)}`)
-      .join('\n') || '';
+    let results = [];
+    if (data.AbstractText) results.push(`• DDG Instant: ${data.AbstractText}`);
+    
+    // Check related topics for more snippets
+    if (data.RelatedTopics && data.RelatedTopics.length > 0) {
+      data.RelatedTopics.slice(0, 2).forEach(topic => {
+        if (topic.Text) results.push(`• Related: ${topic.Text}`);
+      });
+    }
+    return results.join('\n');
   } catch { return ''; }
 }
 
@@ -107,39 +148,49 @@ async function searchBing(query) {
   } catch { return ''; }
 }
 
-async function searchCricketNews(query) {
-  console.log(`🔍 Deep Search: ${query}`);
-  
-  // Try very specific sources first
-  const specificQueries = [
-    `${query} site:espncricinfo.com`,
-    `${query} site:bcci.tv`,
-    `${query} site:icc-cricket.com`
-  ];
-
-  let combinedResults = [];
-  
-  // Try one specific site search
-  const siteResults = await searchDuckDuckGo(specificQueries[0]);
-  if (siteResults) combinedResults.push(siteResults);
-
-  // If we still don't have enough, try general search
-  if (combinedResults.length === 0 || combinedResults.join('\n').length < 500) {
-    const generalDDG = await searchDuckDuckGo(query);
-    if (generalDDG) combinedResults.push(generalDDG);
-  }
-
-  // Backup results
-  if (combinedResults.length === 0 || combinedResults.join('\n').length < 800) {
-    const bing = await searchBing(query);
-    if (bing) combinedResults.push(bing);
+async function searchDuckDuckGoLite(query) {
+  try {
+    const q = encodeURIComponent(query);
+    const html = await fetchURL(`https://duckduckgo.com/lite/?q=${q}`);
+    if (!html) return '';
     
-    const wiki = await searchWikipedia(query);
-    if (wiki) combinedResults.push(wiki);
+    // Lite version has results in table rows or specific classes
+    const results = [];
+    const snippets = [...html.matchAll(/class="result-snippet"[^>]*>(.*?)<\/td>/gs)]
+      .map(m => cleanHTML(m[1])).filter(s => s.length > 30).slice(0, 5);
+    
+    return snippets.map(s => `• ${s}`).join('\n');
+  } catch { return ''; }
+}
+
+async function searchCricketNews(query) {
+  console.log(`🔍 Ultimate Research: ${query}`);
+  
+  // High-value targets in parallel
+  const [wiki, genDDG, espn, cricbuzz] = await Promise.all([
+    searchWikipedia(query),
+    searchDuckDuckGoLite(query),
+    searchDuckDuckGoLite(`${query} site:espncricinfo.com`),
+    searchDuckDuckGoLite(`${query} site:cricbuzz.com`)
+  ]);
+
+  let parts = [];
+  if (wiki) parts.push(wiki);
+  if (espn) parts.push(`[News: ESPNCricinfo]\n${espn}`);
+  if (cricbuzz) parts.push(`[News: Cricbuzz]\n${cricbuzz}`);
+  if (genDDG) parts.push(`[Web Search]\n${genDDG}`);
+
+  const context = parts.join('\n\n');
+  if (context.length < 150) {
+    // Greedy Keyword Fallback
+    const keywords = query.replace(/who|is|the|of|match|final|won|winner|for|on/gi, '').trim();
+    if (keywords.length > 3) {
+      const fallback = await searchDuckDuckGoLite(`${keywords} cricket news results`);
+      if (fallback) return `[Deep Research Context]\n${fallback}`;
+    }
   }
 
-  const finalResults = [...new Set(combinedResults)].join('\n');
-  return finalResults ? `[Live Cricket Search Results]\n${finalResults.slice(0, 4000)}` : '';
+  return context ? `[Authoritative Cricket Context]\n${context.slice(0, 7000)}` : 'Authoritative cricket information is being refined. Please specify the match or event more clearly.';
 }
 
 function needsLiveSearch(question) {
