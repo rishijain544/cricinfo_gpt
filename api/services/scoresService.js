@@ -18,6 +18,9 @@ function fetchUrl(url, headers = { 'User-Agent': 'Mozilla/5.0' }) {
 
 // Fetch from RapidAPI Cricbuzz
 function fetchRapidAPI(path) {
+  const apiKey = (process.env.RAPIDAPI_KEY || '').trim();
+  if (!apiKey || apiKey.includes('your')) return Promise.resolve(null);
+
   return new Promise((resolve) => {
     const options = {
       hostname: 'cricbuzz-cricket.p.rapidapi.com',
@@ -25,12 +28,12 @@ function fetchRapidAPI(path) {
       method: 'GET',
       headers: {
         'x-rapidapi-host': 'cricbuzz-cricket.p.rapidapi.com',
-        'x-rapidapi-key': (process.env.RAPIDAPI_KEY || '').trim(),
+        'x-rapidapi-key': apiKey,
       },
     };
     const req = https.request(options, (res) => {
       if (res.statusCode !== 200) {
-        console.warn(`RapidAPI error: ${res.statusCode}`);
+        // Silent fail for 403/401 to avoid cluttering logs
         return resolve(null);
       }
       let data = '';
@@ -41,78 +44,61 @@ function fetchRapidAPI(path) {
       });
     });
     req.on('error', () => resolve(null));
-    req.setTimeout(5000, () => { req.destroy(); resolve(null); });
+    req.setTimeout(4000, () => { req.destroy(); resolve(null); });
     req.end();
   });
 }
 
 async function getRSSScores() {
-  try {
-    const rssData = await fetchUrl('https://www.espncricinfo.com/rss/livescores.xml');
-    if (!rssData || !rssData.includes('<item>')) return [];
+  const feeds = [
+    { url: 'https://www.espncricinfo.com/rss/livescores.xml', source: 'ESPN' },
+    { url: 'https://push.api.bbci.co.uk/pips/service/news/sport/cricket/rss.xml', source: 'BBC' }
+  ];
 
-    const items = rssData.split('<item>').slice(1);
-    const matches = items.map((item, idx) => {
-      const title = item.match(/<title>(.*?)<\/title>/)?.[1] || 'Match';
-      const desc = item.match(/<description>(.*?)<\/description>/)?.[1] || '';
-      const guid = item.match(/<guid>(.*?)<\/guid>/)?.[1] || idx.toString();
+  let allMatches = [];
+  for (const feed of feeds) {
+    try {
+      const rssData = await fetchUrl(feed.url);
+      if (!rssData || !rssData.includes('<item>')) continue;
 
-      // Basic cleanup
-      const cleanTitle = title.replace('<![CDATA[', '').replace(']]>', '').replace(/&amp;/g, '&');
-      const cleanDesc = desc.replace('<![CDATA[', '').replace(']]>', '').replace(/&amp;/g, '&');
+      const items = rssData.split('<item>').slice(1);
+      const matches = items.map((item, idx) => {
+        const title = (item.match(/<title>(.*?)<\/title>/)?.[1] || 'Match').replace('<![CDATA[', '').replace(']]>', '');
+        const desc = (item.match(/<description>(.*?)<\/description>/)?.[1] || '').replace('<![CDATA[', '').replace(']]>', '');
+        
+        const cleanTitle = title.replace(/&amp;/g, '&').trim();
+        const cleanDesc = desc.replace(/&amp;/g, '&').trim();
 
-      // Detect Live status based on description content
-      const isLive = cleanDesc.includes('*') || cleanDesc.includes('needs') || cleanDesc.includes('won');
-      
-      // Parse teams from title: "Team A vs Team B, 2nd Test"
-      const teams = cleanTitle.split(',')[0].split(' vs ');
-      
-      // Parse scores from description: "Team A 312/8 (50.0) v Team B 268/4 (43.4)"
-      const scoreParts = cleanDesc.split(' v ');
-      const scores = scoreParts.map(part => {
-        const teamMatch = part.match(/(.*?) (\d+\/\d+|\d+)(?: \((\d+\.?\d*)\))?/);
-        if (teamMatch) {
-          return {
-            inning: teamMatch[1].replace('*', '').trim(),
-            r: parseInt(teamMatch[2].split('/')[0]),
-            w: parseInt(teamMatch[2].split('/')[1] || 10),
-            o: teamMatch[3] || '0.0'
-          };
-        }
-        return null;
-      }).filter(Boolean);
-
-      return {
-        id: guid.split('/').pop() || idx.toString(),
-        name: teams.join(' vs '),
-        seriesName: cleanTitle.split(',')[1]?.trim() || 'Series',
-        status: cleanDesc,
-        venue: 'International Grounds',
-        matchType: cleanTitle.includes('Test') ? 'TEST' : (cleanTitle.includes('ODI') ? 'ODI' : 'T20'),
-        teams: teams,
-        score: scores,
-        isLive: isLive,
-        priority: isLive ? 1 : 2,
-        source: 'RSS'
-      };
-    });
-
-    return matches;
-  } catch (err) {
-    console.warn('RSS parse error:', err.message);
-    return [];
+        const isLive = cleanDesc.includes('*') || cleanDesc.toLowerCase().includes('needs') || cleanDesc.toLowerCase().includes('ongoing');
+        
+        return {
+          id: `${feed.source}-${idx}`,
+          name: cleanTitle,
+          seriesName: feed.source === 'BBC' ? 'BBC Sport' : (cleanTitle.split(',')[1]?.trim() || 'International'),
+          status: cleanDesc || 'Match in progress',
+          venue: 'Various',
+          matchType: cleanTitle.includes('Test') ? 'TEST' : (cleanTitle.includes('ODI') ? 'ODI' : 'T20'),
+          isLive: isLive,
+          priority: isLive ? 1 : 2,
+          source: feed.source
+        };
+      });
+      allMatches = [...allMatches, ...matches];
+    } catch (err) {
+      console.warn(`RSS feed fail (${feed.source}):`, err.message);
+    }
   }
+  return allMatches;
 }
 
 async function getLiveScores() {
   try {
-    const apiKey = (process.env.RAPIDAPI_KEY || '').trim();
     let matches = [];
 
-    // 1. Try RapidAPI first if key exists
-    if (apiKey && !apiKey.includes('your')) {
-      const data = await fetchRapidAPI('/matches/v1/live');
-      if (data && data.typeMatches) {
+    // 1. Try RapidAPI (Silently fails if 403)
+    const data = await fetchRapidAPI('/matches/v1/live');
+    if (data && data.typeMatches) {
+        // ... (RapidAPI parsing logic stays same) ...
         const typeMatches = data.typeMatches || [];
         for (const type of typeMatches) {
           const seriesList = type.seriesMatches || [];
@@ -122,31 +108,24 @@ async function getLiveScores() {
             for (const match of matchList) {
               const info = match.matchInfo || {};
               const score = match.matchScore || {};
-
               const team1 = info.team1?.teamName || '';
               const team2 = info.team2?.teamName || '';
-              
-              const extractScore = (teamScore) => {
-                if (!teamScore) return null;
-                const inngs = teamScore.inngs4 || teamScore.inngs3 || teamScore.inngs2 || teamScore.inngs1;
-                return inngs ? { r: inngs.runs, w: inngs.wickets, o: inngs.overs } : null;
+              const extractScore = (ts) => {
+                if (!ts) return null;
+                const i = ts.inngs4 || ts.inngs3 || ts.inngs2 || ts.inngs1;
+                return i ? { r: i.runs, w: i.wickets, o: i.overs } : null;
               };
-
               const s1 = extractScore(score.team1Score);
               const s2 = extractScore(score.team2Score);
-
               const scores = [];
               if (s1) scores.push({ inning: team1, ...s1 });
               if (s2) scores.push({ inning: team2, ...s2 });
-
               const state = (info.state || '').toLowerCase();
               const isLive = state === 'in progress' || state === 'live' || state === 'stumps';
-              
               let priority = 4;
-              if (state === 'in progress' || state === 'live') priority = 1;
-              else if (state === 'stumps') priority = 2;
-              else if (state === 'complete' || info.status?.toLowerCase().includes('won')) priority = 3;
-
+              if (isLive) priority = 1;
+              else if (info.status?.toLowerCase().includes('won')) priority = 3;
+              
               matches.push({
                 id: info.matchId || Math.random().toString(),
                 name: `${team1} vs ${team2}`,
@@ -163,29 +142,25 @@ async function getLiveScores() {
             }
           }
         }
-      }
     }
 
-    // 2. Fallback to RSS if RapidAPI returned no live matches or failed
-    const liveMatchesCount = matches.filter(m => m.isLive).length;
-    if (liveMatchesCount === 0) {
-      console.log('Falling back to RSS for live scores...');
-      const rssMatches = await getRSSScores();
-      if (rssMatches.length > 0) {
-        // Filter out matches already in the list if any
-        const existingNames = new Set(matches.map(m => m.name.toLowerCase()));
-        const uniqueRss = rssMatches.filter(m => !existingNames.has(m.name.toLowerCase()));
-        matches = [...uniqueRss, ...matches];
-      }
+    // 2. Multi-RSS Fallback
+    const rssMatches = await getRSSScores();
+    if (rssMatches.length > 0) {
+      const existingNames = new Set(matches.map(m => m.name.toLowerCase()));
+      const uniqueRss = rssMatches.filter(m => !existingNames.has(m.name.toLowerCase()));
+      matches = [...matches, ...uniqueRss];
     }
 
-    // Sort: Live (1) -> Stumps (2) -> Results (3) -> Upcoming (4)
-    matches.sort((a, b) => {
-      if (a.priority !== b.priority) return a.priority - b.priority;
-      return parseInt(b.id || 0) - parseInt(a.id || 0);
-    });
+    // 3. Ultimate Mock Fallback if EVERYTHING failed (should not happen with RSS)
+    if (matches.length === 0) {
+      matches = getMockScores();
+    }
 
-    return matches.length > 0 ? matches.slice(0, 15) : getMockScores();
+    // Sort: Priority (1=Live, 2=Recent/RSS, etc)
+    matches.sort((a, b) => (a.priority || 4) - (b.priority || 4));
+
+    return matches.slice(0, 15);
 
   } catch (err) {
     console.error('Scores fetch error:', err.message);
