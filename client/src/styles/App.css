@@ -539,6 +539,31 @@ h1, h2, h3, .logo {
   100% { transform: translateX(100%); }
 }
 
+/* Ad Placements */
+.ad-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.2);
+  margin-bottom: 5px;
+}
+
+.ad-placeholder {
+  width: 728px;
+  max-width: 95%;
+  height: 90px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: #555;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border-radius: 4px;
+}
+
 /* Modal for Scorecard */
 .scorecard-overlay {
   position: fixed;
