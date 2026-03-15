@@ -1,7 +1,6 @@
 import React, { useRef, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Float, PerspectiveCamera, Text, Stars, ContactShadows, Environment } from '@react-three/drei';
-import * as THREE from 'three';
+import { PerspectiveCamera, Stars, ContactShadows, Environment } from '@react-three/drei';
 
 function CricketBall() {
   const mesh = useRef();
