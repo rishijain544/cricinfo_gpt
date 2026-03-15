@@ -36,54 +36,6 @@ function cleanHTML(html) {
     .trim();
 }
 
-async function searchDuckDuckGo(query) {
-  try {
-    // Enrich query if it doesn't mention cricket
-    const enrichedQuery = query.toLowerCase().includes('cricket') ? query : `${query} cricket`;
-    const q = encodeURIComponent(enrichedQuery);
-    const html = await fetchURL(`https://html.duckduckgo.com/html/?q=${q}`);
-    if (!html) return '';
-    
-    // Improved regex for DuckDuckGo HTML results
-    const results = [];
-    const mainMatches = [...html.matchAll(/class="result__body"[^>]*>(.*?)<\/div>/gs)];
-    
-    for (const match of mainMatches.slice(0, 5)) {
-      const body = match[1];
-      const titleMatch = body.match(/class="result__a"[^>]*>(.*?)<\/a>/s);
-      const snippetMatch = body.match(/class="result__snippet"[^>]*>(.*?)<\/a>/s);
-      
-      if (titleMatch) {
-        const title = cleanHTML(titleMatch[1]);
-        const snippet = snippetMatch ? cleanHTML(snippetMatch[1]) : '';
-        results.push(`• ${title}: ${snippet}`);
-      }
-    }
-    return results.join('\n');
-  } catch { return ''; }
-}
-
-async function searchBing(query) {
-  try {
-    const q = encodeURIComponent(`${query} cricket news`);
-    const html = await fetchURL(`https://www.bing.com/search?q=${q}`);
-    if (!html) return '';
-    
-    // Bing results usually have b_caption class for snippets
-    const snippets = [...html.matchAll(/<div class="b_caption"[^>]*>(.*?)<\/div>/gs)]
-      .map(m => cleanHTML(m[1])).filter(s => s.length > 30).slice(0, 5);
-    
-    if (snippets.length === 0) {
-      // Fallback for simple p tags
-      const results = [...html.matchAll(/<p[^>]*>(.*?)<\/p>/gs)]
-        .map(m => cleanHTML(m[1])).filter(s => s.length > 40).slice(0, 5);
-      return results.map(r => `• ${r}`).join('\n');
-    }
-    
-    return snippets.map(s => `• ${s}`).join('\n');
-  } catch { return ''; }
-}
-
 async function searchWikipedia(query) {
   try {
     const q = encodeURIComponent(query + ' cricket');
@@ -96,30 +48,98 @@ async function searchWikipedia(query) {
   } catch { return ''; }
 }
 
+const JUNK_KEYWORDS = ['currency', 'exchange', 'rate', 'price', 'related searches', 'feedback', 'settings'];
+
+function isJunk(text) {
+  const lower = text.toLowerCase();
+  return JUNK_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+async function searchDuckDuckGo(query) {
+  try {
+    const enrichedQuery = query.toLowerCase().includes('cricket') ? query : `${query} cricket`;
+    const q = encodeURIComponent(enrichedQuery);
+    const html = await fetchURL(`https://html.duckduckgo.com/html/?q=${q}`);
+    if (!html) return '';
+    
+    const results = [];
+    const mainMatches = [...html.matchAll(/class="result__body"[^>]*>(.*?)<\/div>/gs)];
+    
+    for (const match of mainMatches.slice(0, 10)) {
+      const body = match[1];
+      const titleMatch = body.match(/class="result__a"[^>]*>(.*?)<\/a>/s);
+      const snippetMatch = body.match(/class="result__snippet"[^>]*>(.*?)<\/a>/s);
+      
+      if (titleMatch) {
+        const title = cleanHTML(titleMatch[1]);
+        const snippet = snippetMatch ? cleanHTML(snippetMatch[1]) : '';
+        const combined = `${title}: ${snippet}`;
+        
+        if (!isJunk(combined) && combined.length > 50) {
+          results.push(`• ${combined}`);
+        }
+      }
+    }
+    return results.slice(0, 5).join('\n');
+  } catch { return ''; }
+}
+
+async function searchBing(query) {
+  try {
+    const q = encodeURIComponent(`${query} cricket updates`);
+    const html = await fetchURL(`https://www.bing.com/search?q=${q}`);
+    if (!html) return '';
+    
+    const results = [];
+    const snippets = [...html.matchAll(/<div class="b_caption"[^>]*>(.*?)<\/div>/gs)]
+      .map(m => cleanHTML(m[1]));
+    
+    const paragraphs = [...html.matchAll(/<p[^>]*>(.*?)<\/p>/gs)]
+      .map(m => cleanHTML(m[1]));
+
+    const all = [...snippets, ...paragraphs];
+    for (const r of all) {
+      if (!isJunk(r) && r.length > 40 && !results.includes(`• ${r}`)) {
+        results.push(`• ${r}`);
+      }
+    }
+    return results.slice(0, 5).join('\n');
+  } catch { return ''; }
+}
+
 async function searchCricketNews(query) {
-  console.log(`🔍 Searching: ${query}`);
+  console.log(`🔍 Deep Search: ${query}`);
   
-  // Try specialized site search first for high accuracy
-  const siteQuery = `${query} site:espncricinfo.com OR site:cricbuzz.com`;
-  let result = await searchDuckDuckGo(siteQuery);
+  // Try very specific sources first
+  const specificQueries = [
+    `${query} site:espncricinfo.com`,
+    `${query} site:bcci.tv`,
+    `${query} site:icc-cricket.com`
+  ];
+
+  let combinedResults = [];
   
-  if (!result || result.length < 100) {
-    // If site search failed or was sparse, try general enriched search
-    const generalResult = await searchDuckDuckGo(query);
-    result = result ? `${result}\n${generalResult}` : generalResult;
+  // Try one specific site search
+  const siteResults = await searchDuckDuckGo(specificQueries[0]);
+  if (siteResults) combinedResults.push(siteResults);
+
+  // If we still don't have enough, try general search
+  if (combinedResults.length === 0 || combinedResults.join('\n').length < 500) {
+    const generalDDG = await searchDuckDuckGo(query);
+    if (generalDDG) combinedResults.push(generalDDG);
   }
 
-  if (!result || result.length < 200) {
-    const bingResult = await searchBing(query);
-    result = result ? `${result}\n${bingResult}` : bingResult;
+  // Backup results
+  if (combinedResults.length === 0 || combinedResults.join('\n').length < 800) {
+    const bing = await searchBing(query);
+    if (bing) combinedResults.push(bing);
+    
+    const wiki = await searchWikipedia(query);
+    if (wiki) combinedResults.push(wiki);
   }
 
-  if (!result || result.length < 300) {
-    const wikiResult = await searchWikipedia(query);
-    result = result ? `${result}\n${wikiResult}` : wikiResult;
-  }
-
-  return result ? `[Live Search Results]\n${result.slice(0, 3000)}` : '';
+  const finalResults = [...new Set(combinedResults)].join('\n');
+  return finalResults ? `[Live Cricket Search Results]\n${finalResults.slice(0, 4000)}` : '';
 }
 
 function needsLiveSearch(question) {
@@ -130,10 +150,10 @@ function needsLiveSearch(question) {
     'ashes','series','final','semi-final','schedule','ranking','number 1',
     'new captain','appointed','retired','debut','injured','injury','squad',
     'selected','dropped','auction','record','broke','broken','new record',
-    'wtc','test championship',
+    'wtc','test championship','wplt20','t20wc',
   ];
   const q = question.toLowerCase();
-  return keywords.some(kw => q.includes(kw));
+  return keywords.some(kw => q.includes(kw)) || q.match(/\d{4}/);
 }
 
 module.exports = { searchCricketNews, needsLiveSearch };
