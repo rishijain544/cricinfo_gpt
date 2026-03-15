@@ -141,6 +141,23 @@ async function searchDuckDuckGoLite(query) {
   } catch { return ''; }
 }
 
+async function searchOfficialSites(query) {
+  const q = query.toLowerCase();
+  let siteQueries = [];
+
+  if (q.includes('ipl')) {
+    siteQueries.push(`site:iplt20.com ${query}`);
+  } else {
+    // For general cricket queries, target ICC
+    siteQueries.push(`site:icc-cricket.com ${query}`);
+  }
+
+  try {
+    const results = await Promise.all(siteQueries.map(sq => searchDuckDuckGoLite(sq)));
+    return results.filter(r => r).join('\n');
+  } catch { return ''; }
+}
+
 async function searchCricketNews(query) {
   console.log(`🔍 Extreme Research: ${query}`);
   const tournament = resolveTournament(query);
@@ -151,12 +168,14 @@ async function searchCricketNews(query) {
     ? `${tournament} winner final result match summary`
     : `${tournament} final match details summary`;
 
-  const [wiki, mainResults] = await Promise.all([
+  const [official, wiki, mainResults] = await Promise.all([
+    searchOfficialSites(query),
     searchWikipedia(query),
     searchDuckDuckGoLite(searchTerms)
   ]);
 
   let parts = [];
+  if (official) parts.push(`[Official Site Information]\n${official}`);
   if (wiki) parts.push(wiki);
   if (mainResults) parts.push(`[Authoritative Data Snippets]\n${mainResults}`);
 
