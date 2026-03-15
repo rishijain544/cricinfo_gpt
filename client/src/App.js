@@ -37,11 +37,6 @@ function App() {
       
       <LiveScores />
       
-      <div className="ad-container top-banner">
-        {/* Placeholder for Top Banner Ad */}
-        <div className="ad-placeholder">PROMOTED AD SLOT</div>
-      </div>
-
       <main className="main-content">
         <QuizSidebar />
         <ChatBox isApiOnline={isApiOnline} />
