@@ -1,6 +1,7 @@
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
+const { getLiveScores } = require('./scoresService');
 
 const USER_AGENTS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -186,15 +187,25 @@ async function searchCricketNews(query) {
   // High-value targeted searches
   const searchTerms = isHistorical 
     ? `${tournament} winner final result match summary`
-    : `${tournament} final match details summary`;
+    : `${tournament} live score today points table schedule result`;
 
-  const [official, wiki, mainResults] = await Promise.all([
+  const [official, wiki, mainResults, liveScores] = await Promise.all([
     searchOfficialSites(query),
     searchWikipedia(query),
-    searchDuckDuckGoLite(searchTerms)
+    searchDuckDuckGoLite(searchTerms),
+    (query.includes('2026') || query.toLowerCase().includes('live')) ? getLiveScores() : Promise.resolve([])
   ]);
 
   let parts = [];
+  
+  if (liveScores && liveScores.length > 0) {
+    const liveContext = liveScores
+      .filter(m => m.isLive || query.toLowerCase().includes(m.name.toLowerCase()) || query.toLowerCase().includes(m.seriesName.toLowerCase()))
+      .map(m => `• [LIVE/RECENT] ${m.name} (${m.seriesName}): ${m.status}`)
+      .join('\n');
+    if (liveContext) parts.push(`[Current Live/Recent Matches]\n${liveContext}`);
+  }
+
   if (official) parts.push(`[Official Site Information]\n${official}`);
   if (wiki) parts.push(wiki);
   if (mainResults) parts.push(`[Authoritative Data Snippets]\n${mainResults}`);
