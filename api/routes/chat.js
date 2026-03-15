@@ -22,15 +22,19 @@ router.post('/', async (req, res) => {
     }
 
     // Check if needs live search/context
-    let liveContext = '';
+    let combinedContext = '';
     if (needsLiveSearch(question)) {
       const [searchResults, liveScores] = await Promise.all([
         searchCricketNews(question),
         getLiveScores(),
       ]);
 
-      liveContext = searchResults;
-      
+      // Gather all context
+      // PLACE SEARCH CONTEXT AT TOP - It is the most specific to the query
+      if (searchResults) {
+        combinedContext += `${searchResults}\n\n`;
+      }
+
       // Append live score summary if relevant
       if (liveScores && liveScores.length > 0) {
         const scoreSummary = liveScores
@@ -39,12 +43,12 @@ router.post('/', async (req, res) => {
           .join('\n');
         
         if (scoreSummary) {
-          liveContext = `[Current Live Scores]\n${scoreSummary}\n\n${liveContext}`;
+          combinedContext += `[Current Live Scores]\n${scoreSummary}\n\n`;
         }
       }
     }
 
-    const answer = await getCricketAnswer(question, history, liveContext);
+    const answer = await getCricketAnswer(question, history, combinedContext);
     res.json({ answer, images: null, isImageResponse: false });
 
   } catch (err) {
