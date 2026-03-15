@@ -82,7 +82,10 @@ function resolveTournament(query) {
   }
   if (q.includes('ipl')) {
     // Standardize to "YYYY Indian Premier League" for Wikipedia
-    return year ? `${year} Indian Premier League` : "Indian Premier League";
+    const iplRes = year ? `${year} Indian Premier League` : "Indian Premier League";
+    // Also include TATA IPL for better matching
+    if (year) return `${year} TATA IPL winner final`;
+    return iplRes;
   }
   if (q.includes('wpl')) {
     return year ? `${year} Women's Premier League (cricket)` : "Women's Premier League (cricket)";
@@ -103,14 +106,14 @@ async function searchWikipedia(query) {
     ];
     
     const allTitles = await Promise.all(queries.map(async (q) => {
-      const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&format=json&srlimit=2`;
+      const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&format=json&srlimit=5`;
       const raw = await fetchURL(searchUrl);
       if (!raw) return [];
       const data = JSON.parse(raw);
       return data.query?.search?.map(s => s.title) || [];
     }));
 
-    const titles = [...new Set(allTitles.flat())].slice(0, 4);
+    const titles = [...new Set(allTitles.flat())].slice(0, 6);
     if (titles.length === 0) return '';
 
     const summaries = await Promise.all(titles.map(async (title) => {
@@ -136,20 +139,37 @@ async function searchDuckDuckGoLite(query) {
     const html = await fetchURL(`https://duckduckgo.com/lite/?q=${q}`);
     if (!html) return '';
     const snippets = [...html.matchAll(/class="result-snippet"[^>]*>(.*?)<\/td>/gs)]
-      .map(m => cleanHTML(m[1])).filter(s => s.length > 30).slice(0, 5);
-    return snippets.map(s => `• ${s}`).join('\n');
+      .map(m => cleanHTML(m[1])).filter(s => s.length > 20).slice(0, 8);
+    
+    // Weight snippets that look like they contain the answer
+    return snippets.map(s => {
+      const lower = s.toLowerCase();
+      const isWinner = lower.includes('winner') || lower.includes('champion') || lower.includes('defeated') || lower.includes('won by') || lower.includes('triumphed');
+      const prefix = isWinner ? '[KEY RESULT] ' : '• ';
+      return `${prefix}${s}`;
+    }).join('\n');
   } catch { return ''; }
 }
 
 async function searchOfficialSites(query) {
   const q = query.toLowerCase();
+  const yearMatch = q.match(/20\d{2}/);
+  const year = yearMatch ? yearMatch[0] : '';
   let siteQueries = [];
 
   if (q.includes('ipl')) {
-    siteQueries.push(`site:iplt20.com ${query}`);
+    // Targeted searches for IPL winner and final
+    siteQueries.push(`site:iplt20.com ${year} IPL winner`);
+    siteQueries.push(`site:iplt20.com ${year} TATA IPL final`);
+    siteQueries.push(`site:iplt20.com ${year} IPL champions`);
+    // Fallback to other authoritative site if iplt20.com is silent
+    siteQueries.push(`site:espncricinfo.com ${year} IPL final match report winner`);
   } else {
     // For general cricket queries, target ICC
     siteQueries.push(`site:icc-cricket.com ${query}`);
+    if (year) {
+      siteQueries.push(`site:icc-cricket.com ${year} world cup winner`);
+    }
   }
 
   try {
