@@ -1,0 +1,14 @@
+{
+  "name": "cricketgpt",
+  "version": "2.0.0",
+  "scripts": {
+    "kill-ports": "powershell -Command \"Get-NetTCPConnection -LocalPort 3000, 3001 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; exit 0\"",
+    "predev": "npm run kill-ports",
+    "dev": "concurrently \"node api/index.js\" \"cd client && npm start\"",
+    "build": "cd client && npm run build",
+    "start": "node api/index.js"
+  },
+  "dependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
