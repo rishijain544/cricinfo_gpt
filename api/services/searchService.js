@@ -38,25 +38,49 @@ function cleanHTML(html) {
 
 async function searchDuckDuckGo(query) {
   try {
-    const q = encodeURIComponent(query);
+    // Enrich query if it doesn't mention cricket
+    const enrichedQuery = query.toLowerCase().includes('cricket') ? query : `${query} cricket`;
+    const q = encodeURIComponent(enrichedQuery);
     const html = await fetchURL(`https://html.duckduckgo.com/html/?q=${q}`);
     if (!html) return '';
-    const snippets = [...html.matchAll(/class="result__snippet"[^>]*>(.*?)<\/a>/gs)]
-      .map(m => cleanHTML(m[1])).filter(s => s.length > 30).slice(0, 5);
-    const titles = [...html.matchAll(/class="result__title"[^>]*>.*?<a[^>]*>(.*?)<\/a>/gs)]
-      .map(m => cleanHTML(m[1])).slice(0, 5);
-    return titles.map((t, i) => `• ${t}: ${snippets[i] || ''}`).filter(r => r.length > 10).join('\n');
+    
+    // Improved regex for DuckDuckGo HTML results
+    const results = [];
+    const mainMatches = [...html.matchAll(/class="result__body"[^>]*>(.*?)<\/div>/gs)];
+    
+    for (const match of mainMatches.slice(0, 5)) {
+      const body = match[1];
+      const titleMatch = body.match(/class="result__a"[^>]*>(.*?)<\/a>/s);
+      const snippetMatch = body.match(/class="result__snippet"[^>]*>(.*?)<\/a>/s);
+      
+      if (titleMatch) {
+        const title = cleanHTML(titleMatch[1]);
+        const snippet = snippetMatch ? cleanHTML(snippetMatch[1]) : '';
+        results.push(`• ${title}: ${snippet}`);
+      }
+    }
+    return results.join('\n');
   } catch { return ''; }
 }
 
 async function searchBing(query) {
   try {
-    const q = encodeURIComponent(query);
-    const html = await fetchURL(`https://www.bing.com/search?q=${q}&count=5`);
+    const q = encodeURIComponent(`${query} cricket news`);
+    const html = await fetchURL(`https://www.bing.com/search?q=${q}`);
     if (!html) return '';
-    const results = [...html.matchAll(/<p[^>]*>(.*?)<\/p>/gs)]
-      .map(m => cleanHTML(m[1])).filter(s => s.length > 40 && s.length < 400).slice(0, 5);
-    return results.map(r => `• ${r}`).join('\n');
+    
+    // Bing results usually have b_caption class for snippets
+    const snippets = [...html.matchAll(/<div class="b_caption"[^>]*>(.*?)<\/div>/gs)]
+      .map(m => cleanHTML(m[1])).filter(s => s.length > 30).slice(0, 5);
+    
+    if (snippets.length === 0) {
+      // Fallback for simple p tags
+      const results = [...html.matchAll(/<p[^>]*>(.*?)<\/p>/gs)]
+        .map(m => cleanHTML(m[1])).filter(s => s.length > 40).slice(0, 5);
+      return results.map(r => `• ${r}`).join('\n');
+    }
+    
+    return snippets.map(s => `• ${s}`).join('\n');
   } catch { return ''; }
 }
 
@@ -67,20 +91,35 @@ async function searchWikipedia(query) {
     if (!raw) return '';
     const data = JSON.parse(raw);
     return data.query?.search?.slice(0, 3)
-      .map(r => `• ${r.title}: ${cleanHTML(r.snippet)}`)
+      .map(r => `• Wiki: ${r.title} - ${cleanHTML(r.snippet)}`)
       .join('\n') || '';
   } catch { return ''; }
 }
 
 async function searchCricketNews(query) {
   console.log(`🔍 Searching: ${query}`);
-  let result = await searchDuckDuckGo(query);
-  if (result) return `[Live Search: "${query}"]\n${result}`;
-  result = await searchBing(query);
-  if (result) return `[Live Search: "${query}"]\n${result}`;
-  result = await searchWikipedia(query);
-  if (result) return `[Wikipedia: "${query}"]\n${result}`;
-  return '';
+  
+  // Try specialized site search first for high accuracy
+  const siteQuery = `${query} site:espncricinfo.com OR site:cricbuzz.com`;
+  let result = await searchDuckDuckGo(siteQuery);
+  
+  if (!result || result.length < 100) {
+    // If site search failed or was sparse, try general enriched search
+    const generalResult = await searchDuckDuckGo(query);
+    result = result ? `${result}\n${generalResult}` : generalResult;
+  }
+
+  if (!result || result.length < 200) {
+    const bingResult = await searchBing(query);
+    result = result ? `${result}\n${bingResult}` : bingResult;
+  }
+
+  if (!result || result.length < 300) {
+    const wikiResult = await searchWikipedia(query);
+    result = result ? `${result}\n${wikiResult}` : wikiResult;
+  }
+
+  return result ? `[Live Search Results]\n${result.slice(0, 3000)}` : '';
 }
 
 function needsLiveSearch(question) {
