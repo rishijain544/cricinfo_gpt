@@ -60,27 +60,32 @@ function cleanHTML(html) {
 function resolveTournament(query) {
   let q = query.toLowerCase();
   
-  // Specific catch-all for 2024 and 2026 World Cups
+  // Specific catch-all for 2024-2026 World Cups
   if (q.includes('2026') && (q.includes('t20') || q.includes('world cup'))) {
-    return '2026 ICC Men\'s T20 World Cup';
+    return "2026 ICC Men's T20 World Cup";
   }
   if (q.includes('2024') && (q.includes('t20') || q.includes('world cup'))) {
-    return '2024 ICC Men\'s T20 World Cup';
+    return "2024 ICC Men's T20 World Cup";
+  }
+  if (q.includes('2025') && q.includes('champions trophy')) {
+    return "2025 ICC Champions Trophy";
   }
 
+  const yearMatch = q.match(/20\d{2}/);
+  const year = yearMatch ? yearMatch[0] : null;
+
   if (q.includes('t20wc') || q.includes('t20 world cup')) {
-    const yearMatch = q.match(/20\d{2}/);
-    const year = yearMatch ? yearMatch[0] : '2026';
-    return `${year} ICC Men's T20 World Cup`;
+    return `${year || '2026'} ICC Men's T20 World Cup`;
   }
   if (q.includes('odi wc') || (q.includes('world cup') && !q.includes('t20'))) {
-    const yearMatch = q.match(/20\d{2}/);
-    const year = yearMatch ? yearMatch[0] : '2027';
-    return `${year} ICC Cricket World Cup`;
+    return `${year || '2027'} ICC Cricket World Cup`;
   }
   if (q.includes('ipl')) {
-    const yearMatch = q.match(/20\d{2}/);
-    return yearMatch ? `IPL ${yearMatch[0]}` : 'IPL';
+    // Standardize to "YYYY Indian Premier League" for Wikipedia
+    return year ? `${year} Indian Premier League` : "Indian Premier League";
+  }
+  if (q.includes('wpl')) {
+    return year ? `${year} Women's Premier League (cricket)` : "Women's Premier League (cricket)";
   }
   return query;
 }
@@ -88,11 +93,13 @@ function resolveTournament(query) {
 async function searchWikipedia(query) {
   try {
     const targetQuery = resolveTournament(query);
+    const isHistorical = query.match(/20\d{2}/) && !query.includes('2026') && !query.includes('2027');
+    
     // Try multiple search variations
     const queries = [
       targetQuery,
-      `${targetQuery} final`,
-      `${targetQuery} winner`
+      isHistorical ? `${targetQuery} winner` : `${targetQuery} final`,
+      isHistorical ? `${targetQuery} champion` : `${targetQuery} result`
     ];
     
     const allTitles = await Promise.all(queries.map(async (q) => {
@@ -112,7 +119,10 @@ async function searchWikipedia(query) {
       if (!summaryRaw) return null;
       try {
         const data = JSON.parse(summaryRaw);
-        return data.extract ? `• Source Wikipedia (${title}): ${data.extract}` : null;
+        // Prioritize extracts that mention "winner", "defeated", "champion", or "final"
+        const extract = data.extract || '';
+        const weight = (extract.toLowerCase().includes('winner') || extract.toLowerCase().includes('defeated')) ? '[KEY FACT] ' : '';
+        return extract ? `• Source Wikipedia (${title}): ${weight}${extract}` : null;
       } catch { return null; }
     }));
 
@@ -134,21 +144,26 @@ async function searchDuckDuckGoLite(query) {
 async function searchCricketNews(query) {
   console.log(`🔍 Extreme Research: ${query}`);
   const tournament = resolveTournament(query);
+  const isHistorical = query.match(/20\d{2}/) && !query.includes('2026') && !query.includes('2027');
   
   // High-value targeted searches
+  const searchTerms = isHistorical 
+    ? `${tournament} winner final result match summary`
+    : `${tournament} final match details summary`;
+
   const [wiki, mainResults] = await Promise.all([
     searchWikipedia(query),
-    searchDuckDuckGoLite(`${tournament} final match details summary`)
+    searchDuckDuckGoLite(searchTerms)
   ]);
 
   let parts = [];
   if (wiki) parts.push(wiki);
   if (mainResults) parts.push(`[Authoritative Data Snippets]\n${mainResults}`);
 
-  // If match specific info (like scorecard) is requested, try one more deep search
-  if (query.includes('scorecard') || query.includes('stat') || query.includes('result')) {
-    const deepSearch = await searchDuckDuckGoLite(`${query} scorecard result cricinfo`);
-    if (deepSearch) parts.push(`[Detailed Scorecard Context]\n${deepSearch}`);
+  // If match specific info (like scorecard) is requested, or if it's historical and we haven't found much
+  if (query.includes('scorecard') || query.includes('stat') || query.includes('result') || (isHistorical && parts.join('').length < 500)) {
+    const deepSearch = await searchDuckDuckGoLite(`${query} winner result scorecard espncricinfo`);
+    if (deepSearch) parts.push(`[Detailed Historical Context]\n${deepSearch}`);
   }
 
   const context = parts.join('\n\n');
