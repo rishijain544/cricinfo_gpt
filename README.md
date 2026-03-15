@@ -51,5 +51,12 @@ CricketGPT is the ultimate AI-powered cricket analyst and companion. It provides
 
 Perfectly optimized for **Vercel** deployment with a monorepo structure.
 
+## 🌐 Live Demo
+Experience CricketGPT live here:
+
+🔗 https://cricinfogpt.vercel.app/
+
+Explore real-time cricket insights, AI-powered analysis, live scores, and interactive features directly on the website.
+
 ---
 *Created by Rishi Jain | © 2025*
