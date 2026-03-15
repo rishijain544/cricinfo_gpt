@@ -76,22 +76,30 @@ const LiveScores = () => {
         <div className="scorecard-overlay" onClick={() => setExpandedId(null)}>
           <div className="scorecard-modal" onClick={e => e.stopPropagation()}>
             <button className="close-btn" onClick={() => setExpandedId(null)}>×</button>
-            {scores.find(m => m.id === expandedId) && (
-              <div className="modal-content">
-                <h3>{scores.find(m => m.id === expandedId).name}</h3>
-                <p className="series">{scores.find(m => m.id === expandedId).seriesName}</p>
-                <div className="full-scores">
-                  {scores.find(m => m.id === expandedId).score.map((s, i) => (
-                    <div key={i} className="score-row">
-                      <span>{s.inning}</span>
-                      <strong>{s.r}/{s.w} ({s.o} ov)</strong>
-                    </div>
-                  ))}
+            {(() => {
+              const activeMatch = scores.find(m => m.id === expandedId);
+              if (!activeMatch) return null;
+              return (
+                <div className="modal-content">
+                  <h3>{activeMatch.name}</h3>
+                  <p className="series">{activeMatch.seriesName}</p>
+                  <div className="full-scores">
+                    {activeMatch.score && activeMatch.score.length > 0 ? (
+                      activeMatch.score.map((s, i) => (
+                        <div key={i} className="score-row">
+                          <span>{s.inning}</span>
+                          <strong>{s.r}/{s.w} ({s.o} ov)</strong>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="no-score-info">Detailed scorecard currently unavailable</div>
+                    )}
+                  </div>
+                  <div className="modal-status">{activeMatch.status}</div>
+                  <div className="venue">{activeMatch.venue}</div>
                 </div>
-                <div className="modal-status">{scores.find(m => m.id === expandedId).status}</div>
-                <div className="venue">{scores.find(m => m.id === expandedId).venue}</div>
-              </div>
-            )}
+              );
+            })()}
           </div>
         </div>
       )}
